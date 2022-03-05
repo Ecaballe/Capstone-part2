@@ -1,0 +1,335 @@
+---
+title: "edX Capstone Unbalanced Blades Submittal"
+author: "Eduardo Caballero"
+date: "3/5/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+
+
+###############################################################
+###########  Capstone Project Accelerometer Data
+################################################################
+
+
+
+# Load required packages
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+if(!require(dslabs)) install.packages("dslabs", repos = "http://cran.us.r-project.org")
+if(!require(broom)) install.packages("broom", repos = "http://cran.us.r-project.org")
+if(!require(gtools)) install.packages("gtools", repos = "http://cran.us.r-project.org")
+if(!require(dplyr)) install.packages("ddplyr", repos = "http://cran.us.r-project.org")
+if(!require(ggplot2)) install.packages("ggplot2", repos = "http://cran.us.r-project.org")
+if(!require(lubridate)) install.packages("lubridate", repos = "http://cran.us.r-project.org")
+if(!require(randomForest)) install.packages("randomForest", repos = "http://cran.us.r-project.org")
+if(!require(skimr)) install.packages("skimr", repos = "http://cran.us.r-project.org")
+if(!require(rpart)) install.packages("rpart", repos = "http://cran.us.r-project.org")
+if(!require(ranger)) install.packages("ranger", repos = "http://cran.us.r-project.org")
+
+
+library(tidyverse)
+library(caret)
+library(data.table)
+library(dslabs)
+library(broom)
+library(gtools)
+library(dplyr)
+library(ggplot2)
+library(lubridate)
+library(randomForest)
+
+library(skimr)
+library(rpart)
+library(ranger)
+
+
+
+# Uncomment following line to Load data file from local directory
+#path <- "accelerometer.csv"
+
+# Load Data from UCI website
+
+dl <- tempfile()
+download.file("https://archive.ics.uci.edu/ml/machine-learning-databases/00611/accelerometer.csv", dl)
+
+accel <- read.csv(dl, header = TRUE, sep = ",")
+
+
+
+##################################################
+## wconfid: configuration of the weights on the fan, pctid: percent max speed the motor was run, (x, y, z) vibration levels
+##################################################
+
+
+    
+## Calculate Magnitude of vibration
+
+accel <- accel %>% mutate(vibe = sqrt(x^2 + y^2 + z^2), balance = factor(wconfid), pct_rpm = factor(pctid))
+
+## Box Plot of Vibration Magnitudes at various RPM values for balance configuration 1
+
+rpms <- c("20", "25", "30", "35", "40", "45", "50", "75", "100")
+accel %>% filter(pct_rpm %in% rpms, balance == "1") %>% ggplot(aes(balance,vibe, fill = pct_rpm)) +
+  geom_boxplot() 
+
+## Box Plot of Vibration Magnitudes 
+rpms <- c("60", "55", "80", "65", "70", "45", "50", "75", "100")
+vibe_plot_rpms <- accel %>% filter(pct_rpm %in% rpms) %>% ggplot(aes(balance,vibe, fill = pct_rpm)) +
+  geom_boxplot() 
+vibe_plot_rpms
+
+
+##plot vibration levels vs balance
+accel %>% ggplot(aes(z,vibe, color = balance)) + geom_point()
+
+plot(accel$wconfid, accel$vibe)
+
+plot(accel$y, accel$vibe)
+
+boxplot(vibe ~ balance, data = accel )
+
+
+
+
+
+#####################################
+# Create a test and train dataset
+#####################################
+
+#Since vibration levels are low when spinning at lower rpms, remove rpms lower than 50% from the data set
+
+accel <- accel %>% filter(pctid >= 50)
+str(accel)
+
+#Create a validation data set out of 10% of the data
+
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+val_index <- createDataPartition(y = accel$wconfid, times = 1, p = 0.1, list = FALSE)
+accel_data <- accel[-val_index,]
+validation  <- accel[val_index,]
+
+
+
+#Split the accel dataset into a 20% test and a 80% train dataset
+
+
+set.seed(1, sample.kind="Rounding") # if using R 3.5 or earlier, use `set.seed(1)`
+accel_index <- createDataPartition(y = accel_data$wconfid, times = 1, p = 0.2, list = FALSE)
+accel_train <- accel_data[-accel_index,]
+accel_test <- accel_data[accel_index,]
+
+
+sval <- str(validation)
+strain <- str(accel_train)
+stest <- str(accel_test)
+
+
+skimmed <- skim(accel_data)
+tskim <- skimmed[,1:7]
+tskim
+
+
+
+# Create smaller samples to test code when the whole data set is too large to compute
+
+set.seed(1, sample.kind="Rounding")
+ind <- createDataPartition(y = accel_train$wconfid, times = 1, p = 0.1, list = FALSE)
+accel10k <- accel_train[ind,]
+str(accel10k)
+
+
+
+#########################################################
+### Train the model
+#########################################################
+
+#Create function to do a Residual Mean Square Error
+
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+
+
+#Select method pick predictors (x, y, z, vibe, pct_rpm)
+
+train_set <- accel_train 
+str(train_set)
+
+################### knn model with Test_RMSE = 0.6320601
+
+control <- trainControl(method = "cv", number = 10, p = 0.9)
+model_knn <- train(wconfid~ vibe + pctid, data = train_set, method = "knn", tuneGrid = data.frame(k = seq(30, 50, 2)), trControl = control)
+model_knn
+
+# test model on test set
+
+t_model <-model_knn
+rating_hat <- predict(t_model, accel_test)
+Test_RMSE <- RMSE(accel_test$wconfid, rating_hat)
+Test_RMSE
+
+
+################### Random Forest with Test_RMSE = 0.6346502
+
+control <- trainControl(method = "cv", number = 10)
+grid <- data.frame(mtry = c(1, 5, 10))
+model_rf <- train(wconfid ~ vibe + pctid, data = train_set, method = "rf", 
+	ntree = 10,
+	trControl = control,
+	tuneGrid = grid,
+	nSamp = 5000)
+model_rf
+
+# test model on test set
+
+t_model <-model_rf
+rating_hat <- predict(t_model, accel_test)
+Test_RMSE <- RMSE(accel_test$wconfid, rating_hat)
+Test_RMSE
+
+##################### rpart Test_RMSE =  0.637228
+
+
+set.seed(1, sample.kind="Rounding")
+model_rpart <- train(
+  wconfid ~ vibe + pctid, data = train_set, method = "rpart",
+  trControl = trainControl("cv", number = 10),
+  tuneLength = 20
+  )
+model_rpart
+
+# Plot model error vs different values of cp (complexity parameter)
+plot(model_rpart)
+
+# Print the best tuning parameter cp that minimize the model RMSE
+model_rpart$bestTune
+
+# Print the decision tree
+plot(model_rpart$finalModel, margin = 0.1)
+text(model_rpart$finalModel, cex = 0.75)
+
+# test model on test set
+
+t_model <-model_rpart
+rating_hat <- predict(t_model, accel_test)
+Test_RMSE <- RMSE(accel_test$wconfid, rating_hat)
+Test_RMSE
+
+################### Ranger Test_RMSE =  0.6760426
+
+model_ranger <- train(wconfid ~ vibe + pctid, data = train_set, method = "ranger")
+model_ranger
+
+# test model on test set
+
+t_model <-model_ranger
+rating_hat <- predict(t_model, accel_test)
+Test_RMSE <- RMSE(accel_test$wconfid, rating_hat)
+Test_RMSE
+
+
+
+
+###################################################
+############# Final Check   knn = 0.6303947, random forest = .6320287
+###################################################
+
+f_model <- model_rf
+ratingPrediction <- predict(f_model, validation)
+Validation_RMSE <- RMSE(validation$wconfid,ratingPrediction)
+Validation_RMSE
+
+
+
+```
+
+## Executive Summary
+
+When troubleshooting a mechanical system it is often helpful to have an idea of where the problem may be occuring. This project attempts to utilize machine learning to determine the type of imbalance that has occured on a spinning fan blade.  
+
+The data utilized was from a study "Prediction of Motor Failure Time Using An Artificial Neural Network" , doi:10.3390/s19194342, https://www.mdpi.com/1424-8220/19/19/4342 done by Scalabrini Sampaio, Gustavo, Vallim Filho, Arnaldo Rabello de Aguiar, Santos da Silva, Leilton and Augusto da Silva, Leandro.
+
+In the study magnetic weights were placed on the blades to create an imbalance. 3 configurations were utilized 1. the magnets were placed on adjacent blades, 2 the magnets placed on blades 90 degs apart and 3. magnets placed on blades 180 degrees from each other.
+
+Vibration data was collected from the fan at varying rpms.The data can be found at https://archive.ics.uci.edu/ml/machine-learning-databases/00611/accelerometer.csv.
+
+By using the rpms that the fan is spinning at and the vibration levels caused by the imbalance, a model was created to predict the type of imbalance in the fan blades. This would be useful for technicians to know so that they can find the blades that are imbalanced much quicker.
+
+Various models were tested using the caret library. Models tested included knn, random forest, rpart and ranger. The root mean squared error (RMSE) was utilized to determine the best model. The  knn model gave the best results of the models tested.
+
+
+
+
+
+##  Analysis
+
+The downloaded data was reviewed.  It consisted of 5 variables.
+wconfid - an integer either 1,2 or 3 that represented the type of blade imbalance.
+pctid - an integer giving the percent of max rpms that the fan was spinning at
+x, y, z - vibration levels
+
+3 additional columns were added to the data to aid in training and displaying graphics
+vibe - the magnitude of vibration calculated as sqrt(x^2 +y^2 +z^2)
+balance - conversion of wconfid to a factor instead of integer
+pct_rpm - conversion of pctid to a factor instead of an integer.
+
+A boxplot of the data was done to see the distribution of vibration levels for varying rpm levels and balance configurations.
+
+
+```{r echo = FALSE}
+
+vibe_plot_rpms
+
+```
+
+based on this graph it was determined to utilize an rpm level of 50% or greater since the vibration levels did not show much of a difference at slower speeds.  This would mean that the fan would have to be brought up to 50% max speed for our prediction model to operate. When blades are unbalanced, it is best to try and keep the rpms below max level to ensure a dangerous failure does not occur.
+
+The data was then divided into a validation set and a training/test set.  10% of the data was used for the validation set the remaining data was the divided into a train and a test set with a 80% 20% split.
+
+
+
+##  Results
+
+Various machine learning models were tested to determine which one gave the best predicted results. Models tested were knn, random forest, rpart and ranger. The predictors used to train the model were vibe and pct_rpm.
+
+The knn model was run with cross validation. The model was run with the train record set. Once a trained model was established the model was tested on the test data set.  The RMSE results were 0.632061
+The model information is as shown below:
+
+```{r, echo =FALSE}
+model_knn
+```
+
+
+
+The Random Forest model was run with cross validation.  The RMSE results were 0.6346502
+
+
+```{r, echo =FALSE}
+model_rf
+```
+
+
+The rpart model was run with cross validation. The RMSE results were 0.637228. The model information is shown below.
+
+
+```{r, echo =FALSE}
+model_rpart
+```
+The ranger model. The RMSE results were 0.6760426. The model information is shown below.
+
+
+
+```{r, echo =FALSE}
+model_ranger
+```
+
+Since the knn model ran the lowest RMSE in the test, it was run with the validation model and a final RMSE calculated at 0.6303947. The second lowest RMSE was random forest and it was also tested with the validation data which gave a RMSE of 0.6320287
+
+
+##  Conclusion
+
+Based on the models run the knn model performed the best. In order to make this model useful, additional tests would need to be run for different fans and different weight imbalances to determine if these results could be useful in predicting the imbalance in any fan or is it very specific for the fan that was used to gather the initial data. The more generalized these results can be, the more useful they would be in real world applications.
